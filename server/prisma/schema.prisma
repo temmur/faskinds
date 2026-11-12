@@ -1,0 +1,105 @@
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  SUPER_ADMIN
+  HR_MANAGER
+  VIEWER
+}
+
+enum CandidateStatus {
+  NEW
+  PENDING_REVIEW
+  QUALIFIED
+  INVITED
+  REJECTED
+  HIRED
+}
+
+model Admin {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         Role     @default(HR_MANAGER)
+  createdAt    DateTime @default(now())
+}
+
+model Vacancy {
+  id           String      @id @default(cuid())
+  title        String
+  description  String
+  requirements String
+  schedule     String      @default("Flexible")
+  active       Boolean     @default(true)
+  questions    Json
+  createdAt    DateTime    @default(now())
+  candidates   Candidate[]
+}
+
+model Candidate {
+  id           String          @id @default(cuid())
+  telegramId   String?
+  fullName     String
+  phone        String?
+  email        String?
+  experience   String?
+  availability String?
+  language     String          @default("ru")
+  answers      Json            @default("[]")
+  aiScore      Int             @default(0)
+  criteria     Json            @default("{}")
+  strengths    Json            @default("[]")
+  concerns     Json            @default("[]")
+  aiSummary    String?
+  status       CandidateStatus @default(NEW)
+  interviewAt  DateTime?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+  vacancyId    String
+  vacancy      Vacancy         @relation(fields: [vacancyId], references: [id])
+  notes        Note[]
+  history      Activity[]
+
+  @@index([status, createdAt])
+  @@index([aiScore])
+}
+
+model Note {
+  id          String    @id @default(cuid())
+  text        String
+  author      String
+  createdAt   DateTime  @default(now())
+  candidateId String
+  candidate   Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+}
+
+model Activity {
+  id          String    @id @default(cuid())
+  action      String
+  details     String?
+  actor       String
+  createdAt   DateTime  @default(now())
+  candidateId String
+  candidate   Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  title     String
+  message   String
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+model Setting {
+  key   String @id
+  value String
+}
