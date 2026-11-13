@@ -8,7 +8,9 @@
         "build": "tsc",
         "db:generate": "prisma generate",
         "db:migrate": "prisma migrate dev --name init",
-        "db:seed": "tsx prisma/seed.ts"
+        "db:seed": "tsx prisma/seed.ts",
+        "admin:reset": "tsx src/scripts/reset-admin.ts",
+        "test:smoke": "tsx src/scripts/smoke-decision.ts"
     },
     "dependencies": {
         "@prisma/client": "^6.1.0",

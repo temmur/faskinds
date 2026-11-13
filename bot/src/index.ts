@@ -24,6 +24,7 @@ type Session = {
   vacancyTitle?: string;
   name?: string;
   phone?: string;
+  questions?: string[];
   answers: string[];
   index: number;
 };
@@ -171,9 +172,34 @@ function getQuestions(language: Language): string[] {
   return questions[language];
 }
 
+function getVacancyQuestions(raw: unknown, language: Language): string[] {
+  if (Array.isArray(raw)) {
+    const items = raw
+      .map(item => typeof item === 'string' ? item.trim() : '')
+      .filter(Boolean);
+
+    if (items.length) return items;
+  }
+
+  if (raw && typeof raw === 'object') {
+    const localized = (raw as Record<string, unknown>)[language];
+
+    if (Array.isArray(localized)) {
+      const items = localized
+        .map(item => typeof item === 'string' ? item.trim() : '')
+        .filter(Boolean);
+
+      if (items.length) return items;
+    }
+  }
+
+  return getQuestions(language);
+}
+
 async function evaluateCandidate(
   language: Language,
-  answers: string[]
+  answers: string[],
+  interviewQuestions: string[]
 ): Promise<Evaluation> {
   const key = process.env.OPENAI_API_KEY;
 
@@ -247,7 +273,7 @@ Return valid JSON:
               role: 'user',
               content: JSON.stringify({
                 language,
-                answers: getQuestions(language).map((question, index) => ({
+                answers: interviewQuestions.map((question, index) => ({
                   question,
                   answer: answers[index] || ''
                 }))
@@ -340,7 +366,7 @@ async function start(chatId: number) {
 
 async function sendQuestion(chatId: number, session: Session) {
   const t = translations[session.language];
-  const list = getQuestions(session.language);
+  const list = session.questions || getQuestions(session.language);
   const question = list[session.index];
 
   await bot.sendMessage(
@@ -356,7 +382,8 @@ async function finish(chatId: number, session: Session) {
 
   const evaluation = await evaluateCandidate(
     session.language,
-    session.answers
+    session.answers,
+    session.questions || getQuestions(session.language)
   );
 
   if (!session.vacancyId || !session.vacancyTitle) {
@@ -373,8 +400,8 @@ async function finish(chatId: number, session: Session) {
       language: session.language,
 
       experience: session.answers[2] || '',
-      availability: session.answers[15] || '',
-      answers: getQuestions(session.language).map((question, index) => ({
+      availability: session.answers.at(-1) || '',
+      answers: (session.questions || getQuestions(session.language)).map((question, index) => ({
         question,
         answer: session.answers[index] || ''
       })) as Prisma.InputJsonValue,
@@ -496,6 +523,7 @@ bot.on('callback_query', async (query) => {
         language: current.language,
         vacancyId: vacancy.id,
         vacancyTitle: getVacancyTitle(vacancy.title, current.language),
+        questions: getVacancyQuestions(vacancy.questions, current.language),
         answers: [],
         index: 0
       };
@@ -602,7 +630,7 @@ bot.on('message', async (msg) => {
       session.answers[session.index] = text;
       session.index++;
 
-      if (session.index < getQuestions(session.language).length) {
+      if (session.index < (session.questions || getQuestions(session.language)).length) {
         await sendQuestion(chatId, session);
       } else {
         await finish(chatId, session);

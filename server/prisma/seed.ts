@@ -1,12 +1,20 @@
 import 'dotenv/config';
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
+import { z } from 'zod';
 
 const db = new PrismaClient();
 
 async function main() {
-  const email = process.env.ADMIN_EMAIL || 'FasKidsAdmin@fsakids.local';
-  const password = process.env.ADMIN_PASSWORD || 'FasKidsAdminParol';
+  const credentials = z.object({
+    email: z.string().email().transform(value => value.trim().toLowerCase()),
+    password: z.string().min(12)
+  }).parse({
+    email: process.env.ADMIN_EMAIL,
+    password: process.env.ADMIN_PASSWORD
+  });
+
+  const { email, password } = credentials;
 
   const passwordHash = await bcrypt.hash(password, 12);
 
@@ -14,12 +22,12 @@ async function main() {
     where: { email },
     update: {
       passwordHash,
-      name: 'FSAKids Administrator',
+      name: 'FasKids Administrator',
       role: 'SUPER_ADMIN',
     },
     create: {
       email,
-      name: 'FSAKids Administrator',
+      name: 'FasKids Administrator',
       passwordHash,
       role: 'SUPER_ADMIN',
     },

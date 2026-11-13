@@ -14,7 +14,7 @@ import {
   ResponsiveContainer, BarChart, Bar, CartesianGrid
 } from 'recharts';
 
-const API = import.meta.env.VITE_API_URL || 'http://127.0.0.1:5000/api';
+const API = import.meta.env.VITE_API_URL || 'http://127.0.0.1:4000/api';
 
 type Language = 'ru' | 'uz';
 
@@ -147,6 +147,7 @@ const translations: Record<Language, Record<string, string>> = {
     'Password': 'Пароль',
     'Remember me': 'Запомнить меня',
     'Forgot password?': 'Забыли пароль?',
+    'Reset access with the server command': 'Сброс доступа выполняется командой на сервере',
     'Sign in': 'Войти',
     'Signing in…': 'Вход...',
     'Protected administrator access': 'Защищённый доступ администратора',
@@ -160,11 +161,9 @@ const translations: Record<Language, Record<string, string>> = {
     'WORKSPACE': 'РАБОЧЕЕ ПРОСТРАНСТВО',
     'Request failed': 'Ошибка запроса',
     'Login failed': 'Не удалось войти',
-    'No phone provided': 'Телефон не указан',
     'Question': 'Вопрос',
     'No vacancies yet.': 'Пока нет вакансий.',
-    'Full-time': 'Полный рабочий день',
-    'SERVER ENV': 'НАСТРОЙКИ СЕРВЕРА'
+    'Full-time': 'Полный рабочий день'
   },
 
   uz: {
@@ -295,6 +294,7 @@ const translations: Record<Language, Record<string, string>> = {
     'Password': 'Parol',
     'Remember me': 'Meni eslab qolish',
     'Forgot password?': 'Parolni unutdingizmi?',
+    'Reset access with the server command': 'Kirish server buyrug‘i orqali tiklanadi',
     'Sign in': 'Kirish',
     'Signing in…': 'Kirilmoqda…',
     'Protected administrator access': 'Himoyalangan administrator kirishi',
@@ -326,7 +326,10 @@ function translateStatus(status: string): string {
     QUALIFIED: { ru: 'ПОДХОДИТ', uz: 'MOS' },
     INVITED: { ru: 'ПРИГЛАШЁН', uz: 'TAKLIF QILINGAN' },
     REJECTED: { ru: 'ОТКЛОНЁН', uz: 'RAD ETILGAN' },
-    HIRED: { ru: 'ПРИНЯТ', uz: 'ISHGA QABUL QILINGAN' }
+    HIRED: { ru: 'ПРИНЯТ', uz: 'ISHGA QABUL QILINGAN' },
+    PENDING: { ru: 'ОЖИДАЕТ', uz: 'KUTILMOQDA' },
+    SENT: { ru: 'ДОСТАВЛЕНО', uz: 'YETKAZILDI' },
+    FAILED: { ru: 'ОШИБКА', uz: 'XATO' }
   };
 
   return statuses[status]?.[currentLanguage] || status;
@@ -560,7 +563,7 @@ function Login({
   language: Language;
   changeLanguage: (value: Language) => void;
 }) {
-  const [email, setEmail] = useState('FasKidsAdmin@fsakids.local');
+  const [email, setEmail] = useState('admin@faskids.local');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -665,9 +668,9 @@ function Login({
             <label className="check">
               <input type="checkbox" /> {t('Remember me')}
             </label>
-            <a href="mailto:support@example.com?subject=Password%20reset">
+            <span className="reset-hint" title={t('Reset access with the server command')}>
               {t('Forgot password?')}
-            </a>
+            </span>
           </div>
 
           <button className="primary full" disabled={busy}>
@@ -704,6 +707,7 @@ function Page({
         token={token}
         qualified={page === 'Qualified Candidates'}
         setError={setError}
+        canWrite={user.role !== 'VIEWER'}
       />
     );
   }
@@ -719,7 +723,13 @@ function Page({
   }
 
   if (page === 'AI Evaluation') {
-    return <Candidates token={token} qualified setError={setError} />;
+    return (
+      <AiEvaluation
+        token={token}
+        setError={setError}
+        canWrite={user.role !== 'VIEWER'}
+      />
+    );
   }
 
   const pageNames: Record<string, string> = {
@@ -965,7 +975,7 @@ function CandidateTable({ rows }: { rows: any[] }) {
 function Status({ status }: { status: string }) {
   return (
     <span className={`status ${(status || 'NEW').toLowerCase()}`}>
-      {translateStatus((status || 'NEW').replaceAll(' ', '_'))}
+      {translateStatus((status || 'NEW').replace(/ /g, '_'))}
     </span>
   );
 }
@@ -973,11 +983,13 @@ function Status({ status }: { status: string }) {
 function Candidates({
   token,
   qualified,
-  setError
+  setError,
+  canWrite
 }: {
   token: string;
   qualified: boolean;
   setError: (e: string) => void;
+  canWrite: boolean;
 }) {
   const [rows, setRows] = useState<any[]>([]);
   const [q, setQ] = useState('');
@@ -987,6 +999,8 @@ function Candidates({
   const [detail, setDetail] = useState<any>(null);
   const [notes, setNotes] = useState('');
   const [score, setScore] = useState(qualified ? '70' : '0');
+  const [decisionBusy, setDecisionBusy] = useState(false);
+  const [decisionNotice, setDecisionNotice] = useState('');
 
   async function load() {
     try {
@@ -1026,6 +1040,78 @@ function Candidates({
     }
   }
 
+  async function decide(decision: 'APPROVED' | 'REJECTED') {
+    if (!detail || decisionBusy) return;
+
+    const confirmed = window.confirm(
+      currentLanguage === 'ru'
+        ? decision === 'APPROVED'
+          ? 'Одобрить кандидата и отправить ему сообщение в Telegram?'
+          : 'Отказать кандидату и отправить ему сообщение в Telegram?'
+        : decision === 'APPROVED'
+          ? 'Nomzodni ma’qullab, Telegram orqali xabar yuborilsinmi?'
+          : 'Nomzod rad etilib, Telegram orqali xabar yuborilsinmi?'
+    );
+
+    if (!confirmed) return;
+
+    try {
+      setDecisionBusy(true);
+      setDecisionNotice('');
+
+      const result = await request(`/candidates/${detail.id}/decision`, token, {
+        method: 'POST',
+        body: JSON.stringify({ decision })
+      });
+
+      setDecisionNotice(
+        result.telegramSent
+          ? currentLanguage === 'ru'
+            ? 'Решение сохранено, сообщение успешно отправлено кандидату в Telegram.'
+            : 'Qaror saqlandi va Telegram xabari nomzodga yuborildi.'
+          : currentLanguage === 'ru'
+            ? 'Решение сохранено, но Telegram-сообщение не доставлено. Исправьте настройки и повторите отправку.'
+            : 'Qaror saqlandi, ammo Telegram xabari yetkazilmadi. Sozlamalarni tekshirib, qayta yuboring.'
+      );
+
+      await open(detail.id);
+      await load();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setDecisionBusy(false);
+    }
+  }
+
+  async function retryDecisionDelivery() {
+    if (!detail || decisionBusy) return;
+
+    try {
+      setDecisionBusy(true);
+      const result = await request(
+        `/candidates/${detail.id}/decision/retry`,
+        token,
+        { method: 'POST' }
+      );
+
+      setDecisionNotice(
+        result.telegramSent
+          ? currentLanguage === 'ru'
+            ? 'Сообщение успешно отправлено кандидату в Telegram.'
+            : 'Telegram xabari nomzodga muvaffaqiyatli yuborildi.'
+          : currentLanguage === 'ru'
+            ? 'Сообщение снова не доставлено. Проверьте токен бота и Telegram ID кандидата.'
+            : 'Xabar yana yetkazilmadi. Bot tokeni va nomzod Telegram ID sini tekshiring.'
+      );
+
+      await open(detail.id);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setDecisionBusy(false);
+    }
+  }
+
   async function addNote() {
     if (!notes.trim() || !detail) return;
 
@@ -1040,15 +1126,6 @@ function Candidates({
       setError(e.message);
     }
   }
-
-  const statusOptions = [
-    ['NEW', 'Новый', 'Yangi'],
-    ['PENDING_REVIEW', 'На рассмотрении', 'Ko‘rib chiqilmoqda'],
-    ['QUALIFIED', 'Подходит', 'Mos'],
-    ['INVITED', 'Приглашён', 'Taklif qilingan'],
-    ['REJECTED', 'Отклонён', 'Rad etilgan'],
-    ['HIRED', 'Принят', 'Ishga qabul qilingan']
-  ];
 
   return (
     <>
@@ -1214,6 +1291,31 @@ function Candidates({
               <Status status={detail.status} />
             </div>
 
+            {decisionNotice && (
+              <div className="decisionnotice">{decisionNotice}</div>
+            )}
+
+            {detail.decision && (
+              <div className={`decisioncard ${detail.decision.deliveryStatus.toLowerCase()}`}>
+                <div>
+                  <small>
+                    {currentLanguage === 'ru' ? 'РЕШЕНИЕ HR' : 'HR QARORI'}
+                  </small>
+                  <b>
+                    {detail.decision.type === 'APPROVED'
+                      ? currentLanguage === 'ru' ? 'Кандидат одобрен' : 'Nomzod ma’qullandi'
+                      : currentLanguage === 'ru' ? 'Кандидату отказано' : 'Nomzod rad etildi'}
+                  </b>
+                  <span>
+                    {detail.decision.deliveryStatus === 'SENT'
+                      ? currentLanguage === 'ru' ? 'Telegram-сообщение доставлено' : 'Telegram xabari yetkazildi'
+                      : currentLanguage === 'ru' ? 'Telegram-сообщение ожидает повторной отправки' : 'Telegram xabari qayta yuborilishi kerak'}
+                  </span>
+                </div>
+                <Status status={detail.decision.deliveryStatus} />
+              </div>
+            )}
+
             <h3>{t('AI evaluation')}</h3>
             <p className="summary">
               {detail.aiSummary || t('AI evaluation has not been run for this candidate.')}
@@ -1253,18 +1355,276 @@ function Candidates({
             <h3>{t('Activity history')}</h3>
             {(detail.history || []).map((h: any) => (
               <div className="history" key={h.id}>
-                <b>{h.action.replaceAll('_', ' ')}</b>
+                <b>{h.action.replace(/_/g, ' ')}</b>
                 <span>{h.details} · {h.actor} · {new Date(h.createdAt).toLocaleString(currentLanguage === 'ru' ? 'ru-RU' : 'uz-UZ')}</span>
               </div>
             ))}
 
             <div className="actions">
-              <button className="outline" onClick={() => changeStatus('INVITED')}>{t('Invite to interview')}</button>
-              <button className="outline" onClick={() => changeStatus('REJECTED')}>{t('Reject')}</button>
-              <button className="primary" onClick={() => changeStatus('HIRED')}>{t('Mark as hired')}</button>
+              {canWrite && !detail.decision && (
+                <>
+                  <button
+                    className="primary"
+                    disabled={decisionBusy}
+                    onClick={() => decide('APPROVED')}
+                  >
+                    {decisionBusy
+                      ? currentLanguage === 'ru' ? 'Отправка…' : 'Yuborilmoqda…'
+                      : currentLanguage === 'ru' ? 'Одобрить' : 'Ma’qullash'}
+                  </button>
+                  <button
+                    className="danger"
+                    disabled={decisionBusy}
+                    onClick={() => decide('REJECTED')}
+                  >
+                    {currentLanguage === 'ru' ? 'Отказать' : 'Rad etish'}
+                  </button>
+                </>
+              )}
+
+              {canWrite && detail.decision && detail.decision.deliveryStatus !== 'SENT' && (
+                <button
+                  className="outline"
+                  disabled={decisionBusy}
+                  onClick={retryDecisionDelivery}
+                >
+                  {currentLanguage === 'ru'
+                    ? 'Повторить отправку в Telegram'
+                    : 'Telegram xabarini qayta yuborish'}
+                </button>
+              )}
+
+              {canWrite && detail.status === 'INVITED' && (
+                <button className="outline" onClick={() => changeStatus('HIRED')}>
+                  {t('Mark as hired')}
+                </button>
+              )}
             </div>
           </div>
         </div>
+      )}
+    </>
+  );
+}
+
+function AiEvaluation({
+  token,
+  setError,
+  canWrite
+}: {
+  token: string;
+  setError: (e: string) => void;
+  canWrite: boolean;
+}) {
+  const [vacancies, setVacancies] = useState<any[]>([]);
+  const [vacancyId, setVacancyId] = useState('');
+  const [run, setRun] = useState<any>(null);
+  const [eligibleTotal, setEligibleTotal] = useState<number | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [running, setRunning] = useState(false);
+
+  const ru = currentLanguage === 'ru';
+  const recommendations = Array.isArray(run?.recommendations)
+    ? run.recommendations
+    : [];
+
+  useEffect(() => {
+    request('/vacancies', token)
+      .then(data => setVacancies(Array.isArray(data) ? data : []))
+      .catch((e: any) => setError(e.message));
+  }, [token]);
+
+  useEffect(() => {
+    setLoading(true);
+    setEligibleTotal(null);
+    request(
+      `/ai/recommendations/latest?vacancyId=${encodeURIComponent(vacancyId)}`,
+      token
+    )
+      .then(data => setRun(data.run || null))
+      .catch((e: any) => setError(e.message))
+      .finally(() => setLoading(false));
+  }, [token, vacancyId]);
+
+  async function startAnalysis() {
+    try {
+      setRunning(true);
+      setError('');
+      const data = await request('/ai/recommendations', token, {
+        method: 'POST',
+        body: JSON.stringify(vacancyId ? { vacancyId } : {})
+      });
+      setRun(data.run);
+      setEligibleTotal(data.eligibleTotal);
+    } catch (e: any) {
+      const message = String(e.message || '');
+      setError(
+        message.includes('requires usage credits')
+          ? ru
+            ? 'Для Ollama Cloud нужно пополнить usage credits или активировать подписку.'
+            : 'Ollama Cloud uchun usage credits to‘ldirish yoki obunani faollashtirish kerak.'
+          : message
+      );
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  return (
+    <>
+      <Heading
+        eyebrow="AI TALENT REVIEW"
+        title={ru ? 'Рекомендации ИИ' : 'AI tavsiyalari'}
+        desc={ru
+          ? 'Сравните до 100 активных кандидатов и получите приоритетный список для ручного рассмотрения.'
+          : '100 tagacha faol nomzodni taqqoslang va qo‘lda ko‘rib chiqish uchun ustuvor ro‘yxat oling.'}
+      />
+
+      <div className="panel ai-toolbar">
+        <div className="ai-filter">
+          <label>{ru ? 'Вакансия' : 'Vakansiya'}</label>
+          <select value={vacancyId} onChange={e => setVacancyId(e.target.value)}>
+            <option value="">{ru ? 'Все вакансии' : 'Barcha vakansiyalar'}</option>
+            {vacancies.map(vacancy => (
+              <option value={vacancy.id} key={vacancy.id}>{vacancy.title}</option>
+            ))}
+          </select>
+        </div>
+
+        <button
+          className="primary ai-run-button"
+          onClick={startAnalysis}
+          disabled={!canWrite || running}
+          title={!canWrite
+            ? ru ? 'Недоступно для роли Viewer' : 'Viewer roli uchun mavjud emas'
+            : undefined}
+        >
+          <BrainCircuit size={17} />
+          {running
+            ? ru ? 'ИИ анализирует…' : 'AI tahlil qilmoqda…'
+            : ru ? 'Запустить AI-анализ' : 'AI tahlilni boshlash'}
+        </button>
+      </div>
+
+      <div className="ai-advisory">
+        <ShieldCheck size={18} />
+        <div>
+          <b>{ru ? 'Рекомендательный инструмент' : 'Tavsiya vositasi'}</b>
+          <span>
+            {ru
+              ? 'ИИ не принимает решение о найме или отказе. Перед отправкой в Groq Cloud удаляются имя, контакты, ссылки и Telegram-имена; финальное решение всегда принимает HR.'
+              : 'AI ishga olish yoki rad etish qarorini qabul qilmaydi. Groq Cloud’ga yuborishdan oldin ism, aloqa ma’lumotlari, havolalar va Telegram nomlari olib tashlanadi; yakuniy qarorni HR qabul qiladi.'}
+          </span>
+        </div>
+      </div>
+
+      {loading && <div className="panel empty">{t('Loading workspace…')}</div>}
+
+      {!loading && !run && (
+        <div className="panel ai-empty">
+          <BrainCircuit size={34} />
+          <h3>{ru ? 'Анализ ещё не запускался' : 'Tahlil hali ishga tushirilmagan'}</h3>
+          <p>
+            {ru
+              ? 'Выберите вакансию или проанализируйте всех активных кандидатов.'
+              : 'Vakansiyani tanlang yoki barcha faol nomzodlarni tahlil qiling.'}
+          </p>
+        </div>
+      )}
+
+      {!loading && run && (
+        <>
+          <div className="ai-summary-grid">
+            <div className="panel ai-summary-card">
+              <small>{ru ? 'ПРОАНАЛИЗИРОВАНО' : 'TAHLIL QILINDI'}</small>
+              <strong>{run.totalCandidates}</strong>
+              <span>
+                {eligibleTotal && eligibleTotal > run.totalCandidates
+                  ? ru
+                    ? `из ${eligibleTotal} активных · лимит 100`
+                    : `${eligibleTotal} faol nomzoddan · limit 100`
+                  : ru ? 'активных кандидатов' : 'faol nomzod'}
+              </span>
+            </div>
+            <div className="panel ai-summary-card recommended">
+              <small>{ru ? 'РЕКОМЕНДОВАНО К ПРОСМОТРУ' : 'KO‘RIB CHIQISH TAVSIYA ETILDI'}</small>
+              <strong>{run.recommendedCount}</strong>
+              <span>{ru ? 'приоритетных анкет' : 'ustuvor anketa'}</span>
+            </div>
+            <div className="panel ai-summary-card">
+              <small>{ru ? 'МОДЕЛЬ' : 'MODEL'}</small>
+              <strong className="ai-model">{run.model}</strong>
+              <span>{new Date(run.createdAt).toLocaleString(ru ? 'ru-RU' : 'uz-UZ')}</span>
+            </div>
+          </div>
+
+          <div className="panel ai-insight">
+            <div>
+              <small>{ru ? 'ВЫВОД ИИ' : 'AI XULOSASI'}</small>
+              <h3>{run.summary}</h3>
+            </div>
+            <div className="ai-criteria-box">
+              <small>{ru ? 'ПРИНЦИП ОТБОРА' : 'TANLASH TAMOYILI'}</small>
+              <p>{run.selectionCriteria}</p>
+            </div>
+          </div>
+
+          <div className="panel ai-ranking">
+            <div className="paneltitle">
+              <div>
+                <h3>{ru ? 'Рейтинг кандидатов' : 'Nomzodlar reytingi'}</h3>
+                <p>
+                  {ru
+                    ? 'Имена возвращаются только внутри вашей админ-панели.'
+                    : 'Ismlar faqat admin panelingiz ichida ko‘rsatiladi.'}
+                </p>
+              </div>
+              <span className="tag">{run.vacancyTitle || (ru ? 'ВСЕ ВАКАНСИИ' : 'BARCHA VAKANSIYALAR')}</span>
+            </div>
+
+            <div className="ai-candidate-list">
+              {recommendations.map((item: any) => (
+                <div
+                  className={`ai-candidate-row ${item.recommended ? 'is-recommended' : ''}`}
+                  key={item.candidate.id}
+                >
+                  <div className="ai-rank">#{item.rank}</div>
+                  <div className="ai-candidate-main">
+                    <div className="ai-candidate-title">
+                      <div>
+                        <b>{item.candidate.fullName}</b>
+                        <span>{item.candidate.vacancyTitle}</span>
+                      </div>
+                      {item.recommended && (
+                        <span className="ai-recommended">
+                          <CheckCircle2 size={13} />
+                          {ru ? 'Рассмотреть' : 'Ko‘rib chiqish'}
+                        </span>
+                      )}
+                    </div>
+                    <p>{item.reason}</p>
+                    <div className="ai-evidence">
+                      {(item.strengths || []).map((strength: string, index: number) => (
+                        <span className="strength" key={`s-${index}`}>+ {strength}</span>
+                      ))}
+                      {(item.concerns || []).map((concern: string, index: number) => (
+                        <span className="concern" key={`c-${index}`}>! {concern}</span>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="ai-score">
+                    <strong>{item.score}</strong><small>/100</small>
+                    <span>{item.verdict}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="ai-run-meta">
+              {ru ? 'Запустил' : 'Ishga tushirdi'}: {run.createdBy}
+            </div>
+          </div>
+        </>
       )}
     </>
   );

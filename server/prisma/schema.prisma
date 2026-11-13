@@ -23,6 +23,17 @@ enum CandidateStatus {
   HIRED
 }
 
+enum DecisionType {
+  APPROVED
+  REJECTED
+}
+
+enum DeliveryStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
 model Admin {
   id           String   @id @default(cuid())
   email        String   @unique
@@ -67,9 +78,27 @@ model Candidate {
   vacancy      Vacancy         @relation(fields: [vacancyId], references: [id])
   notes        Note[]
   history      Activity[]
+  decision     CandidateDecision?
 
   @@index([status, createdAt])
   @@index([aiScore])
+}
+
+model CandidateDecision {
+  id                String         @id @default(cuid())
+  type              DecisionType
+  message           String
+  deliveryStatus    DeliveryStatus @default(PENDING)
+  deliveryAttempts  Int            @default(0)
+  telegramMessageId String?
+  deliveryError     String?
+  decidedBy         String
+  decidedAt         DateTime       @default(now())
+  sentAt            DateTime?
+  candidateId       String         @unique
+  candidate         Candidate      @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@index([deliveryStatus, decidedAt])
 }
 
 model Note {
@@ -102,4 +131,20 @@ model Notification {
 model Setting {
   key   String @id
   value String
+}
+
+model AiRecommendationRun {
+  id                String   @id @default(cuid())
+  vacancyId         String?
+  vacancyTitle      String?
+  model             String
+  totalCandidates   Int
+  recommendedCount  Int
+  summary           String
+  selectionCriteria String
+  recommendations   Json
+  createdBy         String
+  createdAt         DateTime @default(now())
+
+  @@index([vacancyId, createdAt])
 }
